@@ -146,12 +146,13 @@ __global__ void Seed(u32 * __restrict__ buffer, u32 * __restrict__ indexes, cons
     const u32 node0 = endpoint(nonce, 0);
     const u32 bucket = node0 >> ZBITS;
     u32 counter = atomicAdd(counters + bucket, 1);
-    for (u32 nf=0; ; nf++) {
+    // keep flushing until every thread's nonce is stored; a fixed NFLUSH passes drops nonces
+    // whenever one bucket gets more than (NFLUSH+1)*FLUSHA-1 hits in an iteration, which
+    // happens with larger SEED_TPB
+    for (;;) {
       if (counter < FLUSHA-1) // int counter would need additional test counter >= 0
         tmp[bucket][counter] = nonce;
       __syncthreads();
-      if (nf == NFLUSH)
-        break;
       if (counter == FLUSHA-1) {
         const u32 pos = min((u32)atomicAdd(indexes + bucket, FLUSHA), (u32)(maxOut - FLUSHA));
         const u64 idx = (u64)(bucket + (bucket / NB_NMEM) * (NTLB-1) * NB_NMEM) * maxOut + pos;
@@ -162,11 +163,10 @@ __global__ void Seed(u32 * __restrict__ buffer, u32 * __restrict__ indexes, cons
 #endif
         counters[bucket] %= FLUSHA;
       }
-      __syncthreads();
-      counter -= FLUSHA;
+      const bool pending = counter != ~0u && counter >= FLUSHA;
+      counter = pending ? counter - FLUSHA : ~0u;
+      if (!__syncthreads_or(pending)) break;
     }
-    // negative counters are fine
-    if ((int)counter >= FLUSHA-1) printf("WHOOPS!\n");
   }
   for (u32 i = 0; i < NB / SEED_TPB; i++) {
     const u32 bucket = lid + i * SEED_TPB;
