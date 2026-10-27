@@ -97,7 +97,8 @@ __device__ __forceinline__  u32 endpoint(uint2 nodes, bool uorv) {
 }
 
 #ifndef SEED_TPB
-#define SEED_TPB 256
+// larger Seed blocks pay off once NB=4096 (safe since Seed flushes until done)
+#define SEED_TPB (BUCKBITS >= 12 ? 1024 : 256)
 #endif
 #ifndef TRIM0_TPB
 #define TRIM0_TPB 1024
@@ -195,6 +196,11 @@ const u32 PART_MASK = (1 << PART_BITS) - 1;
 const u32 NONPART_BITS = ZBITS - PART_BITS;
 const word_t NONPART_MASK = (1 << NONPART_BITS) - 1;
 const u32 BITMAPBYTES = (NZ >> PART_BITS) / 8;
+#ifndef LATEBYTES
+// extra, unused shared memory requested by the small trim rounds from round 3 on: fewer resident
+// blocks per SM made them about 20% faster on an RTX 4060 Ti
+#define LATEBYTES 40960
+#endif
 // Seed keeps FLUSHA-1 staged nonces plus a counter per bucket in shared memory
 const u32 SEEDBYTES = NB * FLUSHA * sizeof(u32) > BITMAPBYTES ? NB * FLUSHA * sizeof(u32) : BITMAPBYTES;
 
@@ -729,7 +735,7 @@ struct edgetrimmer {
 
     cudaMemset(indexesA, 0, indexesSize);
 
-    Round<EDGES_A/4, uint2, EDGES_B/4><<<NB<<PART_BITS, TRIM_TPB, BITMAPBYTES>>>(3, (uint2 *)bufferB, (uint2 *)bufferA1, indexesB, indexesA); // to .116
+    Round<EDGES_A/4, uint2, EDGES_B/4><<<NB<<PART_BITS, TRIM_TPB, BITMAPBYTES + LATEBYTES>>>(3, (uint2 *)bufferB, (uint2 *)bufferA1, indexesB, indexesA); // to .116
     if (abort) return false;
     indexcount(4, indexesA);
   
@@ -737,13 +743,13 @@ struct edgetrimmer {
       cudaMemset(indexesB, 0, indexesSize);
       if (round >= tp.ntrims)
         Relay<EDGES_B/4, EDGES_B/4><<<NB, RELAY_TPB>>>(round-1, (uint2 *)bufferA1, (uint2 *)bufferB, indexesA, indexesB, round > tp.ntrims);
-      else Round<EDGES_B/4, uint2, EDGES_B/4><<<NB<<PART_BITS, TRIM_TPB, BITMAPBYTES>>>(round-1, (uint2 *)bufferA1, (uint2 *)bufferB, indexesA, indexesB);
+      else Round<EDGES_B/4, uint2, EDGES_B/4><<<NB<<PART_BITS, TRIM_TPB, BITMAPBYTES + LATEBYTES>>>(round-1, (uint2 *)bufferA1, (uint2 *)bufferB, indexesA, indexesB);
       indexcount(round, indexesB);
       if (abort) return false;
       cudaMemset(indexesA, 0, indexesSize);
       if (round+1 >= tp.ntrims)
         Relay<EDGES_B/4, EDGES_B/4><<<NB, RELAY_TPB>>>(round, (uint2 *)bufferB, (uint2 *)bufferA1, indexesB, indexesA, round+1 > tp.ntrims);
-      else Round<EDGES_B/4, uint2, EDGES_B/4><<<NB<<PART_BITS, TRIM_TPB, BITMAPBYTES>>>(round, (uint2 *)bufferB, (uint2 *)bufferA1, indexesB, indexesA);
+      else Round<EDGES_B/4, uint2, EDGES_B/4><<<NB<<PART_BITS, TRIM_TPB, BITMAPBYTES + LATEBYTES>>>(round, (uint2 *)bufferB, (uint2 *)bufferA1, indexesB, indexesA);
       indexcount(round+1, indexesA);
       if (abort) return false;
     }
