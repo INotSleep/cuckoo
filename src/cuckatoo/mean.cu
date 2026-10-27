@@ -195,6 +195,8 @@ const u32 PART_MASK = (1 << PART_BITS) - 1;
 const u32 NONPART_BITS = ZBITS - PART_BITS;
 const word_t NONPART_MASK = (1 << NONPART_BITS) - 1;
 const u32 BITMAPBYTES = (NZ >> PART_BITS) / 8;
+// Seed keeps FLUSHA-1 staged nonces plus a counter per bucket in shared memory
+const u32 SEEDBYTES = NB * FLUSHA * sizeof(u32) > BITMAPBYTES ? NB * FLUSHA * sizeof(u32) : BITMAPBYTES;
 
 template<u32 maxIn, u32 maxOut>
 __global__ void Round0(u32 * src, u32 * dst, u32 * srcIdx, u32 * dstIdx, const u32 offset) {
@@ -597,7 +599,7 @@ struct edgetrimmer {
   
     cudaMemset(indexesA, 0, indexesSizeNTLB);
     for (u32 i = 0; i < NTLB; i++) {
-      Seed<EDGES_A/NTLB><<<tp.seed.blocks, SEED_TPB, BITMAPBYTES>>>((u32*)(bufferA+i*(sizeA/NMEMTLB)), indexesA+i*NB, i*(NEDGES/NTLB));
+      Seed<EDGES_A/NTLB><<<tp.seed.blocks, SEED_TPB, SEEDBYTES>>>((u32*)(bufferA+i*(sizeA/NMEMTLB)), indexesA+i*NB, i*(NEDGES/NTLB));
     cudaDeviceSynchronize();
       if (abort) return false;
     }
